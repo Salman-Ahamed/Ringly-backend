@@ -33,6 +33,30 @@ export default [
     },
   },
   {
+    files: ['api/**/*.ts'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        tsconfigRootDir: import.meta.dirname,
+        project: './tsconfig.api.json',
+        sourceType: 'module',
+      },
+      globals: {
+        ...globals.node,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint,
+    },
+    rules: {
+      ...tseslint.configs.recommended.rules,
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-explicit-any': 'error',
+      'no-console': ['warn', { allow: ['warn', 'error', 'log'] }],
+    },
+  },
+  {
     files: ['tests/**/*.ts'],
     languageOptions: {
       parser: tsParser,

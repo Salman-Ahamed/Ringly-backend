@@ -5,6 +5,7 @@ const contactSchema = new Schema(
     number: { type: String, required: true },
     name: { type: String, required: true, trim: true },
     photoUrl: { type: String, default: null },
+    photoPublicId: { type: String, default: null },
     ownerId: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
   },
   { timestamps: true }

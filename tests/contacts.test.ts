@@ -2,9 +2,14 @@ import request from 'supertest';
 import { createApp } from '../src/app';
 import { User } from '../src/models/User';
 import { Contact } from '../src/models/Contact';
+import { deletePhoto } from '../src/utils/cloudinary';
 
 jest.mock('../src/models/User');
 jest.mock('../src/models/Contact');
+jest.mock('../src/utils/cloudinary', () => ({
+  uploadPhoto: jest.fn(),
+  deletePhoto: jest.fn(),
+}));
 
 const app = createApp();
 
@@ -32,6 +37,22 @@ describe('POST /contacts/sync', () => {
     const res = await request(app).post('/contacts/sync').send({ userId: 'u1' });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('contacts must be an array');
+  });
+
+  it('rejects non-string photoUrl (400)', async () => {
+    const res = await request(app).post('/contacts/sync').send({
+      userId: 'u1',
+      contacts: [{ number: '01712345678', name: 'Rahim', photoUrl: 42 }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('photoUrl must be a valid string');
+  });
+
+  it('rejects overly large sync payloads (400)', async () => {
+    const contacts = Array.from({ length: 10001 }, (_, i) => ({ number: `0171${i}`.padEnd(11, '0'), name: `C${i}` }));
+    const res = await request(app).post('/contacts/sync').send({ userId: 'u1', contacts });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('contacts must not exceed 10000 entries');
   });
 
   it('upserts contacts and returns synced count', async () => {
@@ -78,6 +99,67 @@ describe('POST /contacts/sync', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.synced).toBe(0);
+  });
+
+  it('stores photoPublicId with the contact', async () => {
+    userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+
+    contactMocks.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ photoPublicId: 'pub-same' }),
+      }),
+    } as never);
+
+    contactMocks.findOneAndUpdate.mockResolvedValueOnce({
+      toObject: () => ({
+        number: '+8801712345678',
+        name: 'Rahim',
+        photoUrl: 'https://x/a.jpg',
+        photoPublicId: 'pub-same',
+        ownerId: 'user-1',
+      }),
+    } as never);
+
+    const res = await request(app).post('/contacts/sync').send({
+      userId: 'user-1',
+      contacts: [{ number: '01712345678', name: 'Rahim', photoUrl: 'https://x/a.jpg', photoPublicId: 'pub-same' }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(contactMocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ number: '+8801712345678' }),
+      expect.objectContaining({ photoPublicId: 'pub-same', photoUrl: 'https://x/a.jpg' }),
+      expect.anything()
+    );
+    expect(deletePhoto).not.toHaveBeenCalled();
+  });
+
+  it('purges the old photo when photoPublicId changes on sync', async () => {
+    userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+
+    contactMocks.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ photoPublicId: 'pub-old' }),
+      }),
+    } as never);
+
+    contactMocks.findOneAndUpdate.mockResolvedValueOnce({
+      toObject: () => ({
+        number: '+8801712345678',
+        name: 'Rahim',
+        photoUrl: 'https://x/b.jpg',
+        photoPublicId: 'pub-new',
+        ownerId: 'user-1',
+      }),
+    } as never);
+
+    const res = await request(app).post('/contacts/sync').send({
+      userId: 'user-1',
+      contacts: [{ number: '01712345678', name: 'Rahim', photoUrl: 'https://x/b.jpg', photoPublicId: 'pub-new' }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(deletePhoto).toHaveBeenCalledWith('pub-old');
   });
 });
 
@@ -143,19 +225,59 @@ describe('DELETE /contacts/:contactId', () => {
     jest.clearAllMocks();
   });
 
-  it('deletes a contact and returns success', async () => {
-    contactMocks.findByIdAndDelete.mockResolvedValue({ _id: { toString: () => 'c1' } } as never);
-
+  it('returns 400 when userId is missing', async () => {
     const res = await request(app).delete('/contacts/c1');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('userId query parameter is required');
+  });
+
+  it('deletes a contact owned by the requester', async () => {
+    contactMocks.findById.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      ownerId: { toString: () => 'user-1' },
+      photoPublicId: null,
+    } as never);
+    contactMocks.deleteOne.mockResolvedValue({ deletedCount: 1 } as never);
+
+    const res = await request(app).delete('/contacts/c1?userId=user-1');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, deletedId: 'c1' });
+    expect(contactMocks.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
+    expect(deletePhoto).not.toHaveBeenCalled();
   });
 
   it('returns 404 when contact not found', async () => {
-    contactMocks.findByIdAndDelete.mockResolvedValue(null);
+    contactMocks.findById.mockResolvedValue(null);
 
-    const res = await request(app).delete('/contacts/missing');
+    const res = await request(app).delete('/contacts/missing?userId=user-1');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Contact not found');
+  });
+
+  it('returns 403 when the contact belongs to someone else', async () => {
+    contactMocks.findById.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      ownerId: { toString: () => 'user-2' },
+      photoPublicId: null,
+    } as never);
+
+    const res = await request(app).delete('/contacts/c1?userId=user-1');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('Not authorized to delete this contact');
+    expect(contactMocks.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('purges the Cloudinary photo before deleting the contact', async () => {
+    contactMocks.findById.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      ownerId: { toString: () => 'user-1' },
+      photoPublicId: 'pub-abc',
+    } as never);
+    contactMocks.deleteOne.mockResolvedValue({ deletedCount: 1 } as never);
+
+    const res = await request(app).delete('/contacts/c1?userId=user-1');
+    expect(res.status).toBe(200);
+    expect(deletePhoto).toHaveBeenCalledWith('pub-abc');
+    expect(contactMocks.deleteOne).toHaveBeenCalled();
   });
 });

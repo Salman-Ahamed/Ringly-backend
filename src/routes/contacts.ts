@@ -4,11 +4,13 @@ import { User } from '../models/User';
 import { ApiError } from '../middleware/errorHandler';
 import { validateSync } from '../middleware/validate';
 import { normalizeNumber } from '../utils/numberNormalizer';
+import { deletePhoto } from '../utils/cloudinary';
 
 interface SyncContactInput {
   number: string;
   name: string;
   photoUrl?: string | null;
+  photoPublicId?: string | null;
 }
 
 interface SyncRequest {
@@ -43,10 +45,24 @@ contactRouter.post('/sync', validateSync, async (req, res, next) => {
       if (!normalized) continue;
 
       const photoUrl = contact.photoUrl ?? null;
+      const photoPublicId = contact.photoPublicId ?? null;
+
+      if (photoPublicId) {
+        const existing = await Contact.findOne({ number: normalized, ownerId: user._id })
+          .select('photoPublicId')
+          .lean();
+        if (existing?.photoPublicId && existing.photoPublicId !== photoPublicId) {
+          try {
+            await deletePhoto(existing.photoPublicId);
+          } catch {
+            // ignore photo cleanup failures
+          }
+        }
+      }
 
       const saved = await Contact.findOneAndUpdate(
         { number: normalized, ownerId: user._id },
-        { number: normalized, name: contact.name, photoUrl, ownerId: user._id },
+        { number: normalized, name: contact.name, photoUrl, photoPublicId, ownerId: user._id },
         { new: true, upsert: true, setDefaultsOnInsert: true }
       );
       if (saved) {
@@ -94,11 +110,30 @@ contactRouter.get('/lookup/:number', async (req, res, next) => {
 contactRouter.delete('/:contactId', async (req, res, next) => {
   try {
     const { contactId } = req.params;
+    const { userId } = req.query;
 
-    const contact = await Contact.findByIdAndDelete(contactId);
+    if (typeof userId !== 'string' || userId.trim().length === 0) {
+      throw new ApiError(400, 'userId query parameter is required');
+    }
+
+    const contact = await Contact.findById(contactId);
     if (!contact) {
       throw new ApiError(404, 'Contact not found');
     }
+
+    if (contact.ownerId.toString() !== userId) {
+      throw new ApiError(403, 'Not authorized to delete this contact');
+    }
+
+    if (contact.photoPublicId) {
+      try {
+        await deletePhoto(contact.photoPublicId);
+      } catch {
+        // ignore photo cleanup failures
+      }
+    }
+
+    await Contact.deleteOne({ _id: contact._id });
 
     res.json({ success: true, deletedId: contact._id.toString() });
   } catch (error) {

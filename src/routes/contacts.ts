@@ -47,16 +47,14 @@ contactRouter.post('/sync', validateSync, async (req, res, next) => {
       const photoUrl = contact.photoUrl ?? null;
       const photoPublicId = contact.photoPublicId ?? null;
 
-      if (photoPublicId) {
-        const existing = await Contact.findOne({ number: normalized, ownerId: user._id })
-          .select('photoPublicId')
-          .lean();
-        if (existing?.photoPublicId && existing.photoPublicId !== photoPublicId) {
-          try {
-            await deletePhoto(existing.photoPublicId);
-          } catch {
-            // ignore photo cleanup failures
-          }
+      const existing = await Contact.findOne({ number: normalized, ownerId: user._id })
+        .select('photoPublicId')
+        .lean();
+      if (existing?.photoPublicId && existing.photoPublicId !== photoPublicId) {
+        try {
+          await deletePhoto(existing.photoPublicId);
+        } catch {
+          // ignore photo cleanup failures
         }
       }
 

@@ -57,6 +57,11 @@ describe('POST /contacts/sync', () => {
 
   it('upserts contacts and returns synced count', async () => {
     userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+    contactMocks.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      }),
+    } as never);
 
     contactMocks.findOneAndUpdate
       .mockResolvedValueOnce({
@@ -91,6 +96,11 @@ describe('POST /contacts/sync', () => {
 
   it('skips invalid numbers but still succeeds', async () => {
     userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+    contactMocks.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      }),
+    } as never);
 
     const res = await request(app).post('/contacts/sync').send({
       userId: 'user-1',
@@ -160,6 +170,39 @@ describe('POST /contacts/sync', () => {
 
     expect(res.status).toBe(200);
     expect(deletePhoto).toHaveBeenCalledWith('pub-old');
+  });
+
+  it('purges the old photo when the photo is removed on sync', async () => {
+    userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+
+    contactMocks.findOne.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ photoPublicId: 'pub-old' }),
+      }),
+    } as never);
+
+    contactMocks.findOneAndUpdate.mockResolvedValueOnce({
+      toObject: () => ({
+        number: '+8801712345678',
+        name: 'Rahim',
+        photoUrl: null,
+        photoPublicId: null,
+        ownerId: 'user-1',
+      }),
+    } as never);
+
+    const res = await request(app).post('/contacts/sync').send({
+      userId: 'user-1',
+      contacts: [{ number: '01712345678', name: 'Rahim', photoUrl: null, photoPublicId: null }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(deletePhoto).toHaveBeenCalledWith('pub-old');
+    expect(contactMocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ number: '+8801712345678' }),
+      expect.objectContaining({ photoPublicId: null, photoUrl: null }),
+      expect.anything()
+    );
   });
 });
 

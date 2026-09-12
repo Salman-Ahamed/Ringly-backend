@@ -163,6 +163,51 @@ describe('POST /contacts/sync', () => {
   });
 });
 
+describe('GET /contacts', () => {
+  const contactMocks = Contact as jest.Mocked<typeof Contact>;
+  const userMocks = User as jest.Mocked<typeof User>;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns 400 when userId is missing', async () => {
+    const res = await request(app).get('/contacts');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('userId query parameter is required');
+  });
+
+  it('returns 404 when user does not exist', async () => {
+    userMocks.findById.mockResolvedValue(null);
+
+    const res = await request(app).get('/contacts?userId=user-1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('User not found');
+  });
+
+  it('returns own contacts sorted by most recent update', async () => {
+    userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+
+    contactMocks.find.mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([
+          { _id: 'c1', number: '+8801712345678', name: 'Rahim', photoUrl: null, photoPublicId: null, ownerId: 'user-1' },
+          { _id: 'c2', number: '+8801811111111', name: 'Karim', photoUrl: 'https://x/a.jpg', photoPublicId: 'pub-1', ownerId: 'user-1' },
+        ]),
+      }),
+    } as never);
+
+    const res = await request(app).get('/contacts?userId=user-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(2);
+    expect(res.body.contacts[0]._id).toBe('c1');
+    expect(res.body.contacts[1].photoPublicId).toBe('pub-1');
+    expect(contactMocks.find).toHaveBeenCalledWith({ ownerId: 'user-1' });
+    expect(contactMocks.find).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('GET /contacts/lookup/:number', () => {
   const contactMocks = Contact as jest.Mocked<typeof Contact>;
   const userMocks = User as jest.Mocked<typeof User>;

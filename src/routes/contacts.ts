@@ -77,6 +77,27 @@ contactRouter.post('/sync', validateSync, async (req, res, next) => {
   }
 });
 
+contactRouter.get('/', async (req, res, next) => {
+  try {
+    const { userId } = req.query;
+
+    if (typeof userId !== 'string' || userId.trim().length === 0) {
+      throw new ApiError(400, 'userId query parameter is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const contacts = await Contact.find({ ownerId: userId }).sort({ updatedAt: -1 }).lean();
+
+    res.json({ contacts });
+  } catch (error) {
+    next(error);
+  }
+});
+
 contactRouter.get('/lookup/:number', async (req, res, next) => {
   try {
     const normalized = normalizeNumber(req.params.number);

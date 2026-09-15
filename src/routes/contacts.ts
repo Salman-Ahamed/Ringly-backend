@@ -96,6 +96,38 @@ contactRouter.get('/', async (req, res, next) => {
   }
 });
 
+contactRouter.get('/pool', async (req, res, next) => {
+  try {
+    const { userId } = req.query;
+
+    if (typeof userId !== 'string' || userId.trim().length === 0) {
+      throw new ApiError(400, 'userId query parameter is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const contacts = await Contact.find().sort({ updatedAt: -1 }).lean();
+
+    const ownerIds = [...new Set(contacts.map((c) => c.ownerId.toString()))];
+    const owners = await User.find({ _id: { $in: ownerIds } }).select('name').lean();
+    const ownerMap = new Map(owners.map((o) => [o._id.toString(), o.name]));
+
+    const result = contacts.map((c) => ({
+      number: c.number,
+      name: c.name,
+      photoUrl: (c as ContactDoc).photoUrl ?? null,
+      ownerName: ownerMap.get(c.ownerId.toString()) ?? 'Unknown',
+    }));
+
+    res.json({ contacts: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 contactRouter.get('/lookup/:number', async (req, res, next) => {
   try {
     const normalized = normalizeNumber(req.params.number);

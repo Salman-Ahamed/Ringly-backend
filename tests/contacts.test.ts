@@ -251,6 +251,65 @@ describe('GET /contacts', () => {
   });
 });
 
+describe('GET /contacts/pool', () => {
+  const contactMocks = Contact as jest.Mocked<typeof Contact>;
+  const userMocks = User as jest.Mocked<typeof User>;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns 400 when userId is missing', async () => {
+    const res = await request(app).get('/contacts/pool');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('userId query parameter is required');
+  });
+
+  it('returns 404 when user does not exist', async () => {
+    userMocks.findById.mockResolvedValue(null);
+
+    const res = await request(app).get('/contacts/pool?userId=user-1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('User not found');
+  });
+
+  it('returns all pool contacts enriched with ownerName', async () => {
+    userMocks.findById.mockResolvedValue({ _id: 'user-1' } as never);
+
+    contactMocks.find.mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([
+          { _id: 'c1', number: '+8801712345678', name: 'Rahim', photoUrl: null, photoPublicId: null, ownerId: 'u1' },
+          { _id: 'c2', number: '+8801811111111', name: 'Karim', photoUrl: 'https://x/a.jpg', photoPublicId: 'pub-1', ownerId: 'u2' },
+        ]),
+      }),
+    } as never);
+
+    (User.find as jest.Mock).mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([
+          { _id: 'u1', name: 'Salman' },
+          { _id: 'u2', name: 'Rina' },
+        ]),
+      }),
+    } as never);
+
+    const res = await request(app).get('/contacts/pool?userId=user-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(2);
+    expect(res.body.contacts[0]).toEqual({
+      number: '+8801712345678',
+      name: 'Rahim',
+      photoUrl: null,
+      ownerName: 'Salman',
+    });
+    expect(res.body.contacts[1].ownerName).toBe('Rina');
+    expect(contactMocks.find).toHaveBeenCalledWith();
+    expect(contactMocks.find).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('GET /contacts/lookup/:number', () => {
   const contactMocks = Contact as jest.Mocked<typeof Contact>;
   const userMocks = User as jest.Mocked<typeof User>;
